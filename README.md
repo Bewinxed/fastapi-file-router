@@ -1,52 +1,75 @@
 ![00034-3220091456](https://github.com/Bewinxed/fastapi-file-router/assets/9145989/760cff2c-dffb-4e08-9617-5de26c861a05)
+
 # FastAPI Dynamic Route Loader 🚀
+
+## Motivation
+
+Sveltekit ruined me 🤓! I made this package because:
+
+> 1. File-based routing is the bees knees.
+> 2. I like to watch the world burn.
+> 3. It's just easier, bro.
 
 This Python module dynamically loads FastAPI routes from a specified directory structure. It is designed to streamline the integration of API routes into a FastAPI app, making it easy to manage large applications with many endpoints.
 
-## Features
+## HOW TO USE
 
-- **Dynamic Route Loading**: Automatically load route files as APIRouter instances into your FastAPI application.
-- **Path Conversion**: Converts square brackets in filenames to curly brackets in route paths to denote path parameters.
-- **Verbose Logging**: Provides detailed logging to help with debugging during route loading.
-- **Auto Tagging**: Automatically tags routes in the FastAPI documentation based on their directory path.
+You can import routes and API Routers as usual, but whenever you want, if you structure your endpoints like below, it will loop over the directory and put all the routes correctly.
+
+### Example
+
+```
+📁 project_root/
+├ 📁 api/  # This folder is set as the directory in the load_routes function
+│ ├ 📄 route.py  # Translates to /api (base route of the directory)
+│   │
+│ ├ 📁 users/
+│   │ ├ 📄 route.py  # /api/users
+│   │ ├ 📄 [user_id].py  # /api/users/{user_id}
+│   │ └ 📄 profile.py  # /api/users/profile
+│   │
+│ ├ 📁 products/
+│   │ ├ 📄 route.py  # /api/products
+│   │ └ 📁 [product_id]/
+│   │  ├ 📄 route.py  # /api/products/{product_id}
+│   │  └ 📄 reviews.py  # /api/products/{product_id}/reviews
+│   │
+│ └ 📁 settings/
+│  ├ 📄 route.py  # /api/settings
+│  └ 📁 notifications/
+│      ├ 📄 route.py  # /api/settings/notifications
+│      └ 📄 email.py  # /api/settings/notifications/email
+├ 📁 templates/
+│ └ 📄 home.html  # Not relevant to FastAPI routes
+└ 📄 main.py  # Where you set up your FastAPI app and call load_routes
+```
 
 ## Installation
 
 Clone this repository or copy the script into your project directory:
 
 ```bash
-git clone https://github.com/Bewinxed/fastapi-file-router
-```
-
-Ensure that you have FastAPI installed, or install it using pip:
-
-```
-pip install fastapi
+pip install fastapi-file-router
 ```
 
 ## Usage
 
-1. Prepare your route files: Create a directory structure where each Python file represents a FastAPI route. Use route.py for base paths and include other .py files for additional route segments. Use square brackets for dynamic segments in filenames, e.g., [user_id].py.
+```python
+from fastapi import FastAPI
+from fastapi_file_router import load_routes
 
-2. Load Routes: Import the load_routes function from the module and pass your FastAPI app instance along with the directory containing your route files.
+app = FastAPI()
 
-## Example directory structure:
+load_routes(server, "routes", verbose=True)
 
-```
-/api
-    /users
-        route.py       # Translates to /users
-        [user_id].py   # Translates to /users/{user_id}
-    /documents
-        /[document_id]
-            route.py   # Translates to /documents/{document_id}
+# Optional
+if __name__ == "__main__":
+    import uvicorn
 
-```
+    uvicorn.run(
+        "main:app",
+    )
 
-3. Run your app
-
-```
-uvicorn app:app --reload
 ```
 
 # Logging
