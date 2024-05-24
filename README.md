@@ -1,3 +1,4 @@
+![00034-3220091456](https://github.com/Bewinxed/fastapi-file-router/assets/9145989/760cff2c-dffb-4e08-9617-5de26c861a05)
 # FastAPI Dynamic Route Loader 🚀
 
 This Python module dynamically loads FastAPI routes from a specified directory structure. It is designed to streamline the integration of API routes into a FastAPI app, making it easy to manage large applications with many endpoints.
