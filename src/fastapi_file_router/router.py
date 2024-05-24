@@ -1,4 +1,5 @@
 import importlib
+import logging
 import os
 from pathlib import Path
 import re
@@ -8,9 +9,14 @@ from fastapi import FastAPI, APIRouter
 
 __all__ = ["load_routes"]
 
+logger = logging.getLogger("fastapi-file-router")
+
 def log(message: str, verbose: bool = False):
     if verbose:
-        print(message)  # Simple print can be replaced with any logging mechanism
+        logger.info(message)  # Simple print can be replaced with any logging mechanism
+    else:
+        logger.debug(message)
+
 
 
 def square_to_curly_brackets(path: str) -> str:
@@ -82,7 +88,7 @@ def load_routes(app: FastAPI, directory: Path, auto_tags: bool = True, verbose: 
 
             route_path = square_to_curly_brackets(
                 "/".join((root / file).as_posix().split("/")[1:-1])
-            )
+            ).replace(directory.name, "")
 
             if re.search(r"\[(.*?)\]", file_path.stem) or file_path.stem != "route":
                 route_path += f"/{file_path.stem}"
@@ -98,7 +104,7 @@ def load_routes(app: FastAPI, directory: Path, auto_tags: bool = True, verbose: 
         log(f"Loaded router with path /{route_path}", verbose=verbose)
         app.include_router(
             router,
-            prefix=f"/{route_path}",
+            prefix=f"{route_path}",
             tags=router.tags,
         )
     log(f"Routes loaded in {time() - start:.2f}s", verbose=verbose)

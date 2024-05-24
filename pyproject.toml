@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fastapi-file-router"
-version = "0.1.11"
+version = "0.1.12"
 description = "File-based routing for FastAPI"
 authors = ["Bewinxed <bewinxed@gmail.com>"]
 license = "WhoCares"
