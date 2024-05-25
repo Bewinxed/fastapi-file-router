@@ -1,6 +1,6 @@
 ![00034-3220091456](https://github.com/Bewinxed/fastapi-file-router/assets/9145989/760cff2c-dffb-4e08-9617-5de26c861a05)
 
-# FastAPI Dynamic Route Loader 🚀
+# FastAPI File-Based Router 🚀
 
 ## Motivation
 
