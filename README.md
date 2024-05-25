@@ -77,7 +77,7 @@ if __name__ == "__main__":
 Enable verbose logging to get detailed output during the route loading process, which can be helpful for debugging:
 
 ```
-load_routes(app, Path("./api"), verbose=True)
+load_routes(app, Path("./routes"), verbose=True)
 ```
 
 # Contributing
