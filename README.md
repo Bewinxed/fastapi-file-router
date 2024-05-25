@@ -20,7 +20,7 @@ You can import routes and API Routers as usual, but whenever you want, if you st
 
 ```
 📁 project_root/
-├ 📁 api/  # This folder is set as the directory in the load_routes function
+├ 📁 routes/  # This folder is set as the directory in the load_routes function
 │ ├ 📄 route.py  # Translates to /api (base route of the directory)
 │   │
 │ ├ 📁 users/
