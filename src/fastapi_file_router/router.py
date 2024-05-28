@@ -1,22 +1,24 @@
 import importlib
 import logging
+import operator
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 from time import time
 from typing import Generator, Optional, Tuple
-from fastapi import FastAPI, APIRouter
+
+from fastapi import APIRouter, FastAPI
 
 __all__ = ["load_routes"]
 
 logger = logging.getLogger("fastapi-file-router")
+
 
 def log(message: str, verbose: bool = False):
     if verbose:
         logger.info(message)  # Simple print can be replaced with any logging mechanism
     else:
         logger.debug(message)
-
 
 
 def square_to_curly_brackets(path: str) -> str:
@@ -29,7 +31,9 @@ def walk(directory: Path) -> Generator[Tuple[str, list[str], list[str]], None, N
     yield from os.walk(directory)
 
 
-def load_routes(app: FastAPI, directory: Path, auto_tags: bool = True, verbose: bool = False):
+def load_routes(
+    app: FastAPI, directory: Path, auto_tags: bool = True, verbose: bool = False
+):
     """
     Dynamically load FastAPI routes from a specified directory.
 
@@ -74,24 +78,28 @@ def load_routes(app: FastAPI, directory: Path, auto_tags: bool = True, verbose: 
                 continue
             if "route" in file_path.stem and file_path.stem != "route":
                 log(
-                    f"Skipping possibly misspelled route file {file_path.stem} in {root}", verbose=verbose
+                    f"Skipping possibly misspelled route file {file_path.stem} in {root}",
+                    verbose=verbose,
                 )
                 continue
 
-            route = importlib.import_module((root / file).as_posix().replace("/", ".")[:-3])
+            route = importlib.import_module(
+                (root / file).as_posix().replace("/", ".")[:-3]
+            )
             router: Optional[APIRouter] = getattr(route, "router", None)
             if not router:
                 log(
-                    f"Router {(root / file).absolute().as_posix()} does not contain a router", verbose=verbose
+                    f"Router {(root / file).absolute().as_posix()} does not contain a router",
+                    verbose=verbose,
                 )
                 continue
 
             route_path = square_to_curly_brackets(
-                "/".join((root / file).as_posix().split("/")[1:-1])
+                "/".join((root / file).as_posix().split("/")[1:-1]),
             ).replace(directory.name, "")
 
             if re.search(r"\[(.*?)\]", file_path.stem) or file_path.stem != "route":
-                route_path += f"/{file_path.stem}"
+                route_path += f"/{{{file_path.stem[1:-1]}}}"
 
             # Register the router
             # convert root path to prefix
@@ -100,7 +108,7 @@ def load_routes(app: FastAPI, directory: Path, auto_tags: bool = True, verbose: 
             routers.append((route_path, router))
 
     # sort alphabetically
-    for route_path, router in sorted(routers, key=lambda x: x[0]):
+    for route_path, router in sorted(routers, key=operator.itemgetter(0)):
         log(f"Loaded router with path /{route_path}", verbose=verbose)
         app.include_router(
             router,
