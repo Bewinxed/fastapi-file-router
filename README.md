@@ -60,7 +60,7 @@ from fastapi_file_router import load_routes
 
 app = FastAPI()
 
-load_routes(server, "routes", verbose=True)
+load_routes(app, "routes", verbose=True)
 
 # Optional
 if __name__ == "__main__":
