@@ -3,9 +3,10 @@ import logging
 import operator
 import os
 import re
+from collections.abc import Generator
 from pathlib import Path
 from time import time
-from typing import Generator, Optional, Tuple
+from typing import Optional
 
 from fastapi import APIRouter, FastAPI
 
@@ -26,7 +27,7 @@ def square_to_curly_brackets(path: str) -> str:
     return path.replace("[", "{").replace("]", "}")
 
 
-def walk(directory: Path) -> Generator[Tuple[str, list[str], list[str]], None, None]:
+def walk(directory: Path) -> Generator[tuple[str, list[str], list[str]], None, None]:
     """Walk through the directory yielding each folder's path and filenames."""
     yield from os.walk(directory)
 
@@ -66,7 +67,7 @@ def load_routes(
     start = time()
     log(f"Loading routes from {directory}", verbose)
 
-    routers: list[Tuple[str, APIRouter]] = []
+    routers: list[tuple[str, APIRouter]] = []
 
     for root, _, files in walk(directory):
         root = Path(root)
@@ -98,13 +99,22 @@ def load_routes(
                 "/".join((root / file).as_posix().split("/")[1:-1]),
             ).replace(directory.name, "")
 
-            if re.search(r"\[(.*?)\]", file_path.stem) or file_path.stem != "route":
-                route_path += f"/{{{file_path.stem[1:-1]}}}"
+            if re.search(r"\[(.*?)\]", file_path.stem):
+                # This is a parameter route like [user_id].py
+                # Extract parameter name from between square brackets
+                match = re.search(r"\[(.*?)\]", file_path.stem)
+                if match:
+                    param_name = match.group(1)
+                    route_path += f"/{{{param_name}}}"
+            elif file_path.stem != "route":
+                # This is a regular file, not a parameter route and not route.py
+                # Just add the filename as a path segment
+                route_path += f"/{file_path.stem}"
 
             # Register the router
             # convert root path to prefix
             if auto_tags:
-                router.tags += [f'{route_path.replace(directory.name, "")}']
+                router.tags += [f"{route_path.replace(directory.name, '')}"]
             routers.append((route_path, router))
 
     # sort alphabetically
