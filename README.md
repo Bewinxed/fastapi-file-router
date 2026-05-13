@@ -2,15 +2,7 @@
 
 # FastAPI File-Based Router 🚀
 
-## Motivation
-
-Sveltekit ruined me 🤓! I made this package because:
-
-> 1. File-based routing is the bees knees.
-> 2. I like to watch the world burn.
-> 3. It's just easier, bro.
-
-This Python module dynamically loads FastAPI routes from a specified directory structure. It walks the directory once, imports every `route.py` (and any sibling `.py` files), and mounts their `router: APIRouter` onto your app with a prefix derived from the path.
+File-based routing for FastAPI, inspired by SvelteKit/Next.js. Drop a `route.py` into a folder and you have an endpoint — no manual `include_router` calls, no central registry to keep in sync.
 
 ## Installation
 
@@ -18,9 +10,21 @@ This Python module dynamically loads FastAPI routes from a specified directory s
 pip install fastapi-file-router
 ```
 
-## Usage
+## A 30-second example
 
-Point `load_routes` at any directory and it does the rest:
+Say you have this on disk:
+
+```
+my_app/
+├── main.py
+└── routes/
+    ├── route.py            # → GET /
+    └── users/
+        ├── route.py        # → GET /users
+        └── [user_id].py    # → GET /users/{user_id}
+```
+
+**`main.py`**
 
 ```python
 from pathlib import Path
@@ -29,67 +33,123 @@ from fastapi import FastAPI
 from fastapi_file_router import load_routes
 
 app = FastAPI()
-
-load_routes(app, Path("routes"), verbose=True)
+load_routes(app, Path("routes"))
 ```
 
-The `directory` argument must be a `pathlib.Path`. Run your app from the parent of that directory so the modules can be imported (e.g. `cd examples && uvicorn main:app`).
+**`routes/route.py`**
 
-### Filesystem conventions
+```python
+from fastapi import APIRouter
 
-```
-📁 routes/                          # passed to load_routes
-├ 📄 route.py                       # GET /
-│
-├ 📁 users/
-│ ├ 📄 route.py                     # /users
-│ ├ 📄 [user_id].py                 # /users/{user_id}
-│ └ 📄 profile.py                   # /users/profile
-│
-├ 📁 products/
-│ ├ 📄 route.py                     # /products
-│ └ 📁 [product_id]/
-│   ├ 📄 route.py                   # /products/{product_id}
-│   └ 📄 reviews.py                 # /products/{product_id}/reviews
-│
-└ 📁 settings/
-  ├ 📄 route.py                     # /settings
-  └ 📁 notifications/
-    ├ 📄 route.py                   # /settings/notifications
-    └ 📄 email.py                   # /settings/notifications/email
+router = APIRouter()
+
+@router.get("/")
+def index():
+    return {"hello": "world"}
 ```
 
-Rules used by the loader:
+**`routes/users/route.py`**
 
-- A file named `route.py` is the index of its directory.
-- Any other `.py` file becomes an extra path segment (`profile.py` → `/profile`).
-- Square brackets in a file or directory name become path parameters (`[user_id]` → `{user_id}`).
-- Each file must expose a module-level `router = APIRouter()`. Files without one are skipped.
-- Files/directories starting with `__` (e.g. `__pycache__`, `__init__.py`) are skipped.
-- A file that has `route` in its name but isn't exactly `route.py` (e.g. `routes.py`, `router.py`) is skipped to guard against typos.
+```python
+from fastapi import APIRouter
 
-### Options
+router = APIRouter()
 
-`load_routes(app, directory, auto_tags=True, verbose=False)`
+@router.get("")
+def list_users():
+    return [{"id": 1, "name": "Ada"}]
+```
 
-- `auto_tags` (default `True`): appends the computed route path to each router's `tags`, which groups endpoints by URL in the `/docs` UI.
-- `verbose` (default `False`): logs each loaded path at `INFO` level on the `fastapi-file-router` logger. Combine with `logging.basicConfig(level=logging.INFO)` to see the output.
+**`routes/users/[user_id].py`**
+
+```python
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("")
+def get_user(user_id: int):
+    return {"id": user_id}
+```
+
+Run it:
+
+```bash
+cd my_app
+uvicorn main:app --reload
+```
+
+You get three live endpoints with zero registration boilerplate:
+
+| Request                  | Response                  |
+| ------------------------ | ------------------------- |
+| `GET /`                  | `{"hello": "world"}`      |
+| `GET /users`             | `[{"id": 1, "name":...}]` |
+| `GET /users/42`          | `{"id": 42}`              |
+
+Open <http://127.0.0.1:8000/docs> and they're already grouped by path.
+
+## How it works
+
+`load_routes(app, Path("routes"))` walks the directory once at startup. For every `.py` file it finds, it imports the module, looks for a top-level `router = APIRouter()`, and calls `app.include_router(router, prefix=...)` with a prefix derived from the file's location.
+
+The mapping rules:
+
+| On disk                                | URL                                   |
+| -------------------------------------- | ------------------------------------- |
+| `routes/route.py`                      | `/`                                   |
+| `routes/users/route.py`                | `/users`                              |
+| `routes/users/profile.py`              | `/users/profile`                      |
+| `routes/users/[user_id].py`            | `/users/{user_id}`                    |
+| `routes/products/[product_id]/route.py`| `/products/{product_id}`              |
+| `routes/products/[product_id]/reviews.py` | `/products/{product_id}/reviews`   |
+
+In short:
+- `route.py` is the directory's index.
+- Any other `.py` filename becomes a path segment.
+- Square brackets — on either a filename or a directory name — become path parameters.
+- Nested folders chain together.
+
+A few quieter rules worth knowing:
+- A file must expose a module-level `router = APIRouter()`. If it doesn't, the file is skipped.
+- Anything starting with `__` (e.g. `__pycache__`, `__init__.py`) is ignored.
+- A file with `route` in the name but not exactly `route.py` (`routes.py`, `router.py`, ...) is skipped to catch typos.
+
+## API
+
+```python
+load_routes(app, directory, auto_tags=True, verbose=False)
+```
+
+| Argument     | Type       | Default | Description                                                                                                       |
+| ------------ | ---------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
+| `app`        | `FastAPI`  | —       | The app to mount routes onto.                                                                                     |
+| `directory`  | `Path`     | —       | A `pathlib.Path` to your routes folder. Run your app from the parent so the modules are importable.               |
+| `auto_tags`  | `bool`     | `True`  | Appends the URL path to each router's `tags`, so `/docs` groups endpoints by route.                               |
+| `verbose`    | `bool`     | `False` | Logs every mounted path at `INFO` on the `fastapi-file-router` logger. Pair with `logging.basicConfig(level=...)`.|
 
 ## Full example
 
-A runnable end-to-end example covering every feature lives in [`examples/`](./examples/). Try it with:
+A runnable app that exercises every feature — nested directories, parameterized folders, multiple HTTP methods, auto tags, verbose logging — lives in [`examples/`](./examples/):
 
 ```bash
 cd examples
 uvicorn main:app --reload
+# then open http://127.0.0.1:8000/docs
 ```
 
-Then open <http://127.0.0.1:8000/docs>.
+## Motivation
 
-# Contributing
+Sveltekit ruined me 🤓:
 
-Contributions are welcome! Please fork the repository and open a pull request with your features or fixes.
+> 1. File-based routing is the bees knees.
+> 2. I like to watch the world burn.
+> 3. It's just easier, bro.
 
-# License
+## Contributing
+
+Contributions welcome — fork and open a PR.
+
+## License
 
 Don't be a bozo.
