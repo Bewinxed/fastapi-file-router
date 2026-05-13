@@ -1,12 +1,11 @@
-import importlib
+import importlib.util
 import logging
-import operator
 import os
 import re
-from collections.abc import Generator
+import sys
 from pathlib import Path
 from time import time
-from typing import Optional
+from types import ModuleType
 
 from fastapi import APIRouter, FastAPI
 
@@ -14,118 +13,123 @@ __all__ = ["load_routes"]
 
 logger = logging.getLogger("fastapi-file-router")
 
+_PARAM_RE = re.compile(r"\[(.*?)\]")
+# Common typos for "route". Anything else is treated as a real path segment.
+_TYPO_NAMES = frozenset({"routes", "router", "routers"})
 
-def log(message: str, verbose: bool = False):
+
+def log(message: str, verbose: bool = False) -> None:
     if verbose:
-        logger.info(message)  # Simple print can be replaced with any logging mechanism
+        logger.info(message)
     else:
         logger.debug(message)
 
 
 def square_to_curly_brackets(path: str) -> str:
     """Convert square brackets in a path to curly brackets for route parameters."""
-    return path.replace("[", "{").replace("]", "}")
+    return _PARAM_RE.sub(lambda m: "{" + m.group(1) + "}", path)
 
 
-def walk(directory: Path) -> Generator[tuple[str, list[str], list[str]], None, None]:
-    """Walk through the directory yielding each folder's path and filenames."""
-    yield from os.walk(directory)
+def _import_module_from_path(file_path: Path) -> ModuleType:
+    resolved = file_path.resolve()
+    module_name = f"fastapi_file_router._loaded_{abs(hash(str(resolved))):x}"
+    spec = importlib.util.spec_from_file_location(module_name, resolved)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module from {resolved}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _segments_for(rel_parts: tuple[str, ...]) -> list[str]:
+    """Compute URL segments for a route file from its parts relative to the routes dir."""
+    *dir_parts, file_part = rel_parts
+    stem = Path(file_part).stem
+    segments = [square_to_curly_brackets(p) for p in dir_parts]
+    if stem == "route":
+        return segments
+    if _PARAM_RE.search(stem):
+        segments.append(square_to_curly_brackets(stem))
+    else:
+        segments.append(stem)
+    return segments
+
+
+def _sort_key(url_path: str) -> tuple[tuple[int, str], ...]:
+    """Sort routes so static segments come before parameter segments at every depth."""
+    parts = url_path.split("/") if url_path else []
+    return tuple((1 if "{" in p else 0, p) for p in parts)
 
 
 def load_routes(
-    app: FastAPI, directory: Path, auto_tags: bool = True, verbose: bool = False
-):
-    """
-    Dynamically load FastAPI routes from a specified directory.
+    app: FastAPI,
+    directory: Path,
+    auto_tags: bool = True,
+    verbose: bool = False,
+) -> FastAPI:
+    """Mount every route file under ``directory`` onto ``app``.
 
     Args:
-        app: The FastAPI app instance to include routers into.
-        directory: The directory path where route files are located.
-            It should follow
-            a structure where each file represents a route module, and nested
-            directories are translated into URL path segments. Files named 'route.py'
-            are treated as index routes for their directory. Filenames other than
-            'route.py' are appended to the path as additional segments. Square brackets
-            in directory names are converted to curly brackets in route paths to denote
-            path parameters.
-        auto_tags: Automatically set tags for routes based on file paths.
-        verbose: Enable detailed logging.
+        app: The FastAPI app to mount routers onto.
+        directory: A ``pathlib.Path`` to the routes folder. May be relative or
+            absolute; nesting (e.g. ``Path("src/routes")``) is supported.
+        auto_tags: If True, append the computed URL path to each router's tags
+            so endpoints group by route in the ``/docs`` UI. The caller's
+            ``router.tags`` list is not mutated.
+        verbose: Log every mounted route at INFO level on the
+            ``fastapi-file-router`` logger.
 
-    Example:
-        Given a directory structure:
-            /api
-                /users
-                    route.py       # Translates to /users
-                    [user_id].py   # Translates to /users/{user_id}
-                /documents
-                    /[document_id]
-                        route.py   # Translates to /documents/{document_id}
+    File-to-URL mapping rules:
+        * ``route.py`` is the index of its directory.
+        * Any other ``.py`` file becomes a URL segment.
+        * ``[param]`` in a file or directory name becomes ``{param}``.
+        * Files/directories starting with ``__`` are skipped (and not descended
+          into).
+        * Files exactly named ``routes.py``, ``router.py``, or ``routers.py``
+          are skipped to guard against typos for ``route.py``.
 
-        The 'route.py' file should define an 'APIRouter' instance named 'router'.
-        This function will load each router and configure it within the FastAPI application.
+    Each route module must define a top-level ``router = APIRouter()``.
     """
     start = time()
+    directory = Path(directory)
     log(f"Loading routes from {directory}", verbose)
 
-    routers: list[tuple[str, APIRouter]] = []
+    routers: list[tuple[str, APIRouter, list[str]]] = []
 
-    for root, _, files in walk(directory):
-        root = Path(root)
-        if root.name.startswith("__"):
-            continue
-        for file in files:
-            file_path = Path(file)
-            if file_path.name.startswith("__") or file_path.suffix != ".py":
+    for root, dirnames, files in os.walk(directory):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("__"))
+        root_path = Path(root)
+
+        for file in sorted(files):
+            if file.startswith("__") or not file.endswith(".py"):
                 continue
-            if "route" in file_path.stem and file_path.stem != "route":
+            file_path = root_path / file
+            stem = file_path.stem
+            if stem in _TYPO_NAMES:
                 log(
-                    f"Skipping possibly misspelled route file {file_path.stem} in {root}",
-                    verbose=verbose,
+                    f"Skipping possibly misspelled route file {file_path} "
+                    "(did you mean route.py?)",
+                    verbose,
                 )
                 continue
 
-            route = importlib.import_module(
-                (root / file).as_posix().replace("/", ".")[:-3]
-            )
-            router: Optional[APIRouter] = getattr(route, "router", None)
-            if not router:
-                log(
-                    f"Router {(root / file).absolute().as_posix()} does not contain a router",
-                    verbose=verbose,
-                )
+            module = _import_module_from_path(file_path)
+            router = getattr(module, "router", None)
+            if not isinstance(router, APIRouter):
+                log(f"Skipping {file_path}: no `router: APIRouter` defined", verbose)
                 continue
 
-            route_path = square_to_curly_brackets(
-                "/".join((root / file).as_posix().split("/")[1:-1]),
-            ).replace(directory.name, "")
+            rel_parts = file_path.relative_to(directory).parts
+            segments = _segments_for(rel_parts)
+            url_path = ("/" + "/".join(segments)) if segments else ""
 
-            if re.search(r"\[(.*?)\]", file_path.stem):
-                # This is a parameter route like [user_id].py
-                # Extract parameter name from between square brackets
-                match = re.search(r"\[(.*?)\]", file_path.stem)
-                if match:
-                    param_name = match.group(1)
-                    route_path += f"/{{{param_name}}}"
-            elif file_path.stem != "route":
-                # This is a regular file, not a parameter route and not route.py
-                # Just add the filename as a path segment
-                route_path += f"/{file_path.stem}"
+            extra_tags = [url_path or "/"] if auto_tags else []
+            routers.append((url_path, router, extra_tags))
 
-            # Register the router
-            # convert root path to prefix
-            if auto_tags:
-                router.tags += [f"{route_path.replace(directory.name, '')}"]
-            routers.append((route_path, router))
+    for url_path, router, extra_tags in sorted(routers, key=lambda r: _sort_key(r[0])):
+        log(f"Loaded router at {url_path or '/'}", verbose)
+        app.include_router(router, prefix=url_path, tags=extra_tags)
 
-    # sort alphabetically
-    for route_path, router in sorted(routers, key=operator.itemgetter(0)):
-        prefix = f"/{route_path}" if route_path else ""
-        log(f"Loaded router with path {prefix or '/'}", verbose=verbose)
-        app.include_router(
-            router,
-            prefix=prefix,
-            tags=router.tags,
-        )
-    log(f"Routes loaded in {time() - start:.2f}s", verbose=verbose)
-
+    log(f"Routes loaded in {time() - start:.2f}s", verbose)
     return app
