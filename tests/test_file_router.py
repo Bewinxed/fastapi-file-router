@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -249,6 +250,58 @@ def test_root_index_route(tmp_path: Path):
     app = FastAPI()
     load_routes(app, routes)
     assert TestClient(app).get("/").json() == {"ok": True}
+
+
+def test_missing_directory_raises(tmp_path: Path):
+    app = FastAPI()
+    with pytest.raises(FileNotFoundError):
+        load_routes(app, tmp_path / "does-not-exist")
+
+
+def test_string_directory_argument(tmp_path: Path):
+    routes = tmp_path / "routes"
+    _make_route(routes / "users" / "route.py")
+    app = FastAPI()
+    load_routes(app, str(routes))
+    assert "/users" in _mounted_paths(app)
+
+
+def test_duplicate_url_paths_raise(tmp_path: Path):
+    """Regression: routes/users.py and routes/users/route.py both map to /users."""
+    routes = tmp_path / "routes"
+    _make_route(routes / "users.py")
+    _make_route(routes / "users" / "route.py")
+    app = FastAPI()
+    with pytest.raises(ValueError, match="Duplicate route path '/users'"):
+        load_routes(app, routes)
+
+
+def test_route_file_import_error_is_wrapped(tmp_path: Path):
+    routes = tmp_path / "routes"
+    routes.mkdir(parents=True)
+    bad = routes / "broken.py"
+    bad.write_text("raise RuntimeError('boom')\n")
+    app = FastAPI()
+    with pytest.raises(RuntimeError, match="Failed to load route file") as info:
+        load_routes(app, routes)
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert "boom" in str(info.value.__cause__)
+
+
+def test_auto_tags_does_not_duplicate_existing_tag(tmp_path: Path):
+    routes = tmp_path / "routes"
+    routes.mkdir(parents=True)
+    (routes / "users").mkdir()
+    (routes / "users" / "route.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter(tags=['/users'])\n"
+        "@router.get('')\n"
+        "def f(): return {}\n"
+    )
+    app = FastAPI()
+    load_routes(app, routes, auto_tags=True)
+    tags = app.openapi()["paths"]["/users"]["get"]["tags"]
+    assert tags == ["/users"]
 
 
 def test_log_function():

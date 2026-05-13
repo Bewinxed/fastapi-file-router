@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from time import time
 from types import ModuleType
+from typing import Union
 
 from fastapi import APIRouter, FastAPI
 
@@ -38,7 +39,11 @@ def _import_module_from_path(file_path: Path) -> ModuleType:
         raise ImportError(f"Could not load module from {resolved}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(module_name, None)
+        raise RuntimeError(f"Failed to load route file {file_path}: {exc}") from exc
     return module
 
 
@@ -64,7 +69,7 @@ def _sort_key(url_path: str) -> tuple[tuple[int, str], ...]:
 
 def load_routes(
     app: FastAPI,
-    directory: Path,
+    directory: Union[Path, str],
     auto_tags: bool = True,
     verbose: bool = False,
 ) -> FastAPI:
@@ -72,30 +77,44 @@ def load_routes(
 
     Args:
         app: The FastAPI app to mount routers onto.
-        directory: A ``pathlib.Path`` to the routes folder. May be relative or
-            absolute; nesting (e.g. ``Path("src/routes")``) is supported.
+        directory: Path to the routes folder. Accepts anything ``pathlib.Path``
+            accepts (``Path`` or ``str``). May be relative or absolute; nesting
+            (e.g. ``Path("src/routes")``) is supported.
         auto_tags: If True, append the computed URL path to each router's tags
             so endpoints group by route in the ``/docs`` UI. The caller's
-            ``router.tags`` list is not mutated.
+            ``router.tags`` list is not mutated; tags already present on the
+            router are not duplicated.
         verbose: Log every mounted route at INFO level on the
             ``fastapi-file-router`` logger.
 
     File-to-URL mapping rules:
         * ``route.py`` is the index of its directory.
         * Any other ``.py`` file becomes a URL segment.
-        * ``[param]`` in a file or directory name becomes ``{param}``.
+        * ``[param]`` in a file or directory name becomes ``{param}``. Mixed
+          names (e.g. ``[user_id]_admin.py``) keep the surrounding text and
+          mount at ``/{user_id}_admin``.
         * Files/directories starting with ``__`` are skipped (and not descended
           into).
         * Files exactly named ``routes.py``, ``router.py``, or ``routers.py``
           are skipped to guard against typos for ``route.py``.
 
-    Each route module must define a top-level ``router = APIRouter()``.
+    Each route module must define a top-level ``router = APIRouter()``. Modules
+    are imported via ``importlib.util.spec_from_file_location`` and their
+    top-level code re-executes on every call to ``load_routes`` — keep module
+    import side effects idempotent.
+
+    Raises:
+        FileNotFoundError: If ``directory`` is not an existing directory.
+        ValueError: If two route files resolve to the same URL path.
+        RuntimeError: If a route file raises during import.
     """
     start = time()
     directory = Path(directory)
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Routes directory does not exist: {directory}")
     log(f"Loading routes from {directory}", verbose)
 
-    routers: list[tuple[str, APIRouter, list[str]]] = []
+    routers: list[tuple[str, Path, APIRouter, list[str]]] = []
 
     for root, dirnames, files in os.walk(directory):
         dirnames[:] = sorted(d for d in dirnames if not d.startswith("__"))
@@ -124,10 +143,26 @@ def load_routes(
             segments = _segments_for(rel_parts)
             url_path = ("/" + "/".join(segments)) if segments else ""
 
-            extra_tags = [url_path or "/"] if auto_tags else []
-            routers.append((url_path, router, extra_tags))
+            extra_tags: list[str] = []
+            if auto_tags:
+                tag = url_path or "/"
+                if tag not in router.tags:
+                    extra_tags.append(tag)
 
-    for url_path, router, extra_tags in sorted(routers, key=lambda r: _sort_key(r[0])):
+            routers.append((url_path, file_path, router, extra_tags))
+
+    seen: dict[str, Path] = {}
+    for url_path, file_path, _router, _tags in routers:
+        if url_path in seen:
+            raise ValueError(
+                f"Duplicate route path {url_path or '/'!r}: "
+                f"{seen[url_path]} and {file_path} both map to it"
+            )
+        seen[url_path] = file_path
+
+    for url_path, _file_path, router, extra_tags in sorted(
+        routers, key=lambda r: _sort_key(r[0])
+    ):
         log(f"Loaded router at {url_path or '/'}", verbose)
         app.include_router(router, prefix=url_path, tags=extra_tags)
 
