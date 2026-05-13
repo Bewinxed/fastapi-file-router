@@ -119,10 +119,11 @@ def load_routes(
 
     # sort alphabetically
     for route_path, router in sorted(routers, key=operator.itemgetter(0)):
-        log(f"Loaded router with path /{route_path}", verbose=verbose)
+        prefix = f"/{route_path}" if route_path else ""
+        log(f"Loaded router with path {prefix or '/'}", verbose=verbose)
         app.include_router(
             router,
-            prefix=f"{route_path}",
+            prefix=prefix,
             tags=router.tags,
         )
     log(f"Routes loaded in {time() - start:.2f}s", verbose=verbose)
